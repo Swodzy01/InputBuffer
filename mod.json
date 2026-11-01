@@ -1,0 +1,11 @@
+{
+	"geode": "5.11.2",
+	"gd": {
+		"win": "2.2081"
+	},
+	"id": "swodzy.inputbuffer",
+	"name": "Input Buffer Menu",
+	"version": "v1.0.0",
+	"developer": "Swodzy",
+	"description": "Ayarlanabilir input buffer (5-300 kare). F6 ile gizli menü açılır, menü kapalıyken de çalışır."
+}
