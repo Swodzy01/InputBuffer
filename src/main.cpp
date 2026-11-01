@@ -1,6 +1,7 @@
 #include <Geode/Geode.hpp>
 #include <Geode/modify/PlayerObject.hpp>
 #include <Geode/modify/CCKeyboardDispatcher.hpp>
+#include <algorithm>
 #include <array>
 #include <vector>
 
@@ -11,7 +12,7 @@ static constexpr std::array<int, 12> FRAME_OPTIONS = {
 	300, 250, 200, 150, 100, 50, 40, 30, 25, 20, 15, 5
 };
 
-// Menu kapaliyken de calisan ayarlar (hizli erisim icin static)
+// Menu kapaliyken de calisan ayarlar
 static bool g_enabled = true;
 static int g_frames = 40;
 
@@ -26,8 +27,7 @@ $on_mod(Loaded) {
 }
 
 // ---------------------------------------------------------------
-// Gizli menu (F6 ile acilir/kapanir). Kapaninca sadece pencere
-// gider, buffer calismaya devam eder.
+// Gizli menu (F6 ile acilir/kapanir)
 // ---------------------------------------------------------------
 class BufferPopup : public geode::Popup {
 protected:
@@ -44,7 +44,6 @@ protected:
 		float w = m_size.width;
 		float h = m_size.height;
 
-		// Aktif/Pasif anahtari
 		auto toggler = CCMenuItemToggler::createWithStandardSprites(
 			this, menu_selector(BufferPopup::onToggle), 0.7f
 		);
@@ -58,7 +57,6 @@ protected:
 		label->setPosition(w / 2.f - 30.f, h - 55.f);
 		m_mainLayer->addChild(label);
 
-		// Kare butonlari (4 sutun x 3 satir)
 		for (size_t i = 0; i < FRAME_OPTIONS.size(); i++) {
 			int frames = FRAME_OPTIONS[i];
 			int col = static_cast<int>(i % 4);
@@ -101,7 +99,6 @@ protected:
 	}
 
 	void onToggle(CCObject* sender) {
-		// Geode'da callback icinde isToggled() eski degeri verir
 		g_enabled = !static_cast<CCMenuItemToggler*>(sender)->isToggled();
 		saveSettings();
 	}
@@ -147,28 +144,40 @@ class $modify(BufferKeys, CCKeyboardDispatcher) {
 };
 
 // ---------------------------------------------------------------
-// Buffer mantigi: zipla tusuna erken basilirsa, N kare boyunca
-// hatirla ve oyuncu yere inince / orb'a degince uygula.
+// Buffer mantigi
+// Pencere (g_frames adim) icinde erken basarsan, basis basabildigin
+// ILK adima tasinir. Tusu ne kadar basili tuttuysan o kadar basili
+// kalir (dash orb icin sart).
 // ---------------------------------------------------------------
 class $modify(BufferPlayer, PlayerObject) {
 	struct Fields {
-		int left = 0;          // kalan buffer kare sayisi
+		int left = 0;          // kalan buffer adimi
 		bool held = false;     // tus su an gercekten basili mi
+		int heldSteps = 0;     // tus erken basistan beri kac adim basili kaldi
+		int releaseIn = 0;     // uygulanan basis kac adim sonra birakilsin
 		bool replaying = false;
 	};
 
+	// Su an basabilir miyiz? (yer ya da kullanilmamis bir orb)
 	bool canAct() {
-		bool onRing = m_touchingRings && m_touchingRings->count() > 0;
-		return m_isOnGround || onRing;
+		if (m_isOnGround) return true;
+		if (!m_touchingRings) return false;
+		for (auto obj : CCArrayExt<GameObject*>(m_touchingRings)) {
+			bool used = m_isSecondPlayer ? obj->m_hasBeenActivatedP2 : obj->m_hasBeenActivated;
+			if (!used) return true;
+		}
+		return false;
 	}
 
 	bool pushButton(PlayerButton btn) {
 		auto f = m_fields.self();
 		if (btn == PlayerButton::Jump && !f->replaying) {
 			f->held = true;
-			// Su an zaten zıplayabiliyorsa oyun kendisi halleder
+			f->releaseIn = 0; // gercek basis geldi, bekleyen sahte birakmayi iptal et
 			if (g_enabled && !this->canAct()) {
 				f->left = g_frames;
+				f->heldSteps = 0;
+				log::debug("[IB] buffer basladi: {} adim", g_frames);
 			}
 		}
 		return PlayerObject::pushButton(btn);
@@ -177,7 +186,8 @@ class $modify(BufferPlayer, PlayerObject) {
 	bool releaseButton(PlayerButton btn) {
 		auto f = m_fields.self();
 		if (btn == PlayerButton::Jump && !f->replaying) {
-			f->held = false; // buffer kaydi kalir, erken birakma sorun degil
+			f->held = false;
+			f->releaseIn = 0;
 		}
 		return PlayerObject::releaseButton(btn);
 	}
@@ -186,22 +196,44 @@ class $modify(BufferPlayer, PlayerObject) {
 		PlayerObject::update(dt);
 
 		auto f = m_fields.self();
-		if (!g_enabled || f->left <= 0) return;
-
-		f->left--;
-		if (this->canAct()) {
+		if (!g_enabled) {
 			f->left = 0;
-			f->replaying = true;
-			PlayerObject::pushButton(PlayerButton::Jump);
-			if (!f->held) {
+			f->releaseIn = 0;
+			return;
+		}
+
+		// Sahte basisi, tusu tuttugun sure kadar sonra birak
+		if (f->releaseIn > 0) {
+			f->releaseIn--;
+			if (f->releaseIn == 0 && !f->held) {
+				f->replaying = true;
 				PlayerObject::releaseButton(PlayerButton::Jump);
+				f->replaying = false;
 			}
-			f->replaying = false;
+		}
+
+		if (f->left > 0) {
+			if (f->held) f->heldSteps++;
+			f->left--;
+
+			if (this->canAct()) {
+				log::debug("[IB] basis uygulandi (kalan: {}, hold: {})", f->left, f->heldSteps);
+				f->left = 0;
+				f->replaying = true;
+				PlayerObject::pushButton(PlayerButton::Jump);
+				f->replaying = false;
+				// Tus zaten birakildiysa, ayni sure basili tutup birak
+				if (!f->held) {
+					f->releaseIn = std::max(f->heldSteps, 1);
+				}
+			}
 		}
 	}
 
 	void resetObject() {
 		PlayerObject::resetObject();
 		m_fields->left = 0;
+		m_fields->releaseIn = 0;
+		m_fields->heldSteps = 0;
 	}
 };
