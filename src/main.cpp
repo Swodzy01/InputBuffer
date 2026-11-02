@@ -153,20 +153,16 @@ class $modify(BufferPlayer, PlayerObject) {
 	struct Fields {
 		int left = 0;          // kalan buffer adimi
 		bool held = false;     // tus su an gercekten basili mi
-		int heldSteps = 0;     // tus erken basistan beri kac adim basili kaldi
+		int heldSteps = 0;     // erken basistan beri kac adim basili kaldi
 		int releaseIn = 0;     // uygulanan basis kac adim sonra birakilsin
+		int prevRings = 0;     // onceki adimdaki orb sayisi
 		bool replaying = false;
 	};
 
-	// Su an basabilir miyiz? (yer ya da kullanilmamis bir orb)
-	bool canAct() {
-		if (m_isOnGround) return true;
-		if (!m_touchingRings) return false;
-		for (auto obj : CCArrayExt<GameObject*>(m_touchingRings)) {
-			bool used = m_isSecondPlayer ? obj->m_hasBeenActivatedP2 : obj->m_hasBeenActivated;
-			if (!used) return true;
-		}
-		return false;
+	// Basis aninda zaten basabiliyor muyuz? (oyun kendisi halleder)
+	bool canActNow() {
+		bool onRing = m_touchingRings && m_touchingRings->count() > 0;
+		return m_isOnGround || onRing;
 	}
 
 	bool pushButton(PlayerButton btn) {
@@ -174,7 +170,7 @@ class $modify(BufferPlayer, PlayerObject) {
 		if (btn == PlayerButton::Jump && !f->replaying) {
 			f->held = true;
 			f->releaseIn = 0; // gercek basis geldi, bekleyen sahte birakmayi iptal et
-			if (g_enabled && !this->canAct()) {
+			if (g_enabled && !this->canActNow()) {
 				f->left = g_frames;
 				f->heldSteps = 0;
 				log::debug("[IB] buffer basladi: {} adim", g_frames);
@@ -196,6 +192,12 @@ class $modify(BufferPlayer, PlayerObject) {
 		PlayerObject::update(dt);
 
 		auto f = m_fields.self();
+
+		// Yeni bir orb'a degdik mi? (orb sayisi arttiysa evet)
+		int ringsNow = m_touchingRings ? static_cast<int>(m_touchingRings->count()) : 0;
+		bool newRing = ringsNow > f->prevRings;
+		f->prevRings = ringsNow;
+
 		if (!g_enabled) {
 			f->left = 0;
 			f->releaseIn = 0;
@@ -216,7 +218,7 @@ class $modify(BufferPlayer, PlayerObject) {
 			if (f->held) f->heldSteps++;
 			f->left--;
 
-			if (this->canAct()) {
+			if (m_isOnGround || newRing) {
 				log::debug("[IB] basis uygulandi (kalan: {}, hold: {})", f->left, f->heldSteps);
 				f->left = 0;
 				f->replaying = true;
@@ -235,5 +237,6 @@ class $modify(BufferPlayer, PlayerObject) {
 		m_fields->left = 0;
 		m_fields->releaseIn = 0;
 		m_fields->heldSteps = 0;
+		m_fields->prevRings = 0;
 	}
 };
